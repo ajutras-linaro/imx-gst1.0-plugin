@@ -41,6 +41,9 @@ GST_DEBUG_CATEGORY_STATIC(vpu_dec_object_debug);
 #define VPU_FIRMWARE_CODE_DIVX_FLAG (1<<18)
 #define VPU_FIRMWARE_CODE_RV_FLAG (1<<19)
 
+#define AJ_WIP 1
+
+
 enum
 {
   AUTO = 0,
@@ -88,6 +91,87 @@ gst_vpu_dec_output_format_get_type (void)
 G_DEFINE_TYPE(GstVpuDecObject, gst_vpu_dec_object, GST_TYPE_OBJECT)
 
 static void gst_vpu_dec_object_finalize(GObject *object);
+
+
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <linux/ion.h>
+#include <linux/dma-buf.h>
+
+// Detect the usage of the ION legacy API (kernel 4.9) by looking at the
+// availability of the ION_IOC_SHARE.
+#ifdef ION_IOC_SHARE
+#define ION_LEGACY_API
+#endif
+
+int allocate_ion(unsigned int size)
+{
+  #define VPU_HEAP_ID 3
+
+  int status = 0;
+  int ion_dev_fd = -1;
+  int fd = -1;
+  struct ion_allocation_data alloc_data;
+#ifdef ION_LEGACY_API
+  struct ion_handle_data hdl_data;
+  struct ion_fd_data fd_data;
+#endif
+
+  GST_DEBUG("Allocate ION (size: %u)", size);
+
+  ion_dev_fd = open("/dev/ion", O_RDWR);
+  if (ion_dev_fd < 0) {
+    GST_ERROR("Failed to open /dev/ion");
+    goto handle_error;
+  }
+
+  alloc_data.len = size;
+#ifdef ION_LEGACY_API
+  alloc_data.align = 0;
+#endif
+  alloc_data.flags = 0;
+  alloc_data.heap_id_mask = 1 << VPU_HEAP_ID;
+  if (ioctl(ion_dev_fd, ION_IOC_ALLOC, &alloc_data) != 0) {
+    GST_ERROR("Failed to allocate buffer (%u bytes) from ION heap ID %d (errno: %d)", size, VPU_HEAP_ID, errno);
+    goto handle_error;
+  }
+
+#ifdef ION_LEGACY_API
+  fd_data.handle = alloc_data.handle;
+  if (ioctl(ion_dev_fd, ION_IOC_SHARE, &fd_data) != -1) {
+    fd = fd_data.fd;
+  } else {
+    GST_ERROR("Failed to share secure buffer.");
+  goto handle_error;
+  }
+  
+  hdl_data.handle = alloc_data.handle;
+  (void)ioctl(ion_dev_fd, ION_IOC_FREE, &hdl_data);
+#else
+  fd = alloc_data.fd;
+#endif
+
+handle_error:
+  if(ion_dev_fd >= 0) {
+    close(ion_dev_fd);
+  }
+
+  return fd;
+}
+
+
+
+void free_ion(int fd) {
+  if(fd >= 0) {
+    close(fd);
+  }
+}
+
+
+
 
 gint gst_vpu_dec_object_get_vpu_fwcode (void)
 {
@@ -572,6 +656,11 @@ gst_vpu_dec_object_set_vpu_param (GstVpuDecObject * vpu_dec_object, \
   open_param->nEnableFileMode = 0;
   open_param->nPicWidth = GST_VIDEO_INFO_WIDTH(info);
   open_param->nPicHeight = GST_VIDEO_INFO_HEIGHT(info);
+
+#ifdef AJ_WIP
+  open_param->nSecureMode = 1;
+  open_param->nSecureBufferAllocSize = 0; //AJ-TODO: Purpose?
+#endif
 
   return TRUE;
 }
@@ -1256,6 +1345,7 @@ gst_vpu_dec_object_set_vpu_input_buf (GstVpuDecObject * vpu_dec_object, \
 {
   GstBuffer * buffer;
   GstMapInfo minfo;
+  unsigned char *phys_addr = NULL;
 
   /* Hantro video decoder can output video frame even if only input one frame.
    * Needn't send EOS to drain it.
@@ -1283,8 +1373,62 @@ gst_vpu_dec_object_set_vpu_input_buf (GstVpuDecObject * vpu_dec_object, \
   buffer = frame->input_buffer;
   gst_buffer_map (buffer, &minfo, GST_MAP_READ);
 
+#ifdef AJ_WIP
+  {
+    int secure_fd = -1;
+    unsigned int secure_size = minfo.size;
+    unsigned char *mapped_data = NULL;
+    struct dma_buf_phys dma_phys;
+
+    GST_INFO("Allocate secure ION buffer\n");
+    secure_fd = allocate_ion(secure_size);
+    if(secure_fd < 0) {
+      GST_ERROR("[AJ] Cannot allocate ION buffer\n");
+      return FALSE;
+    }
+    GST_INFO("[AJ] Allocated secure ION buffer: %d\n", secure_fd);
+
+    GST_INFO("Map secure ION buffer\n");
+    mapped_data = (unsigned char *)mmap(0, secure_size, PROT_READ | PROT_WRITE, MAP_SHARED, secure_fd, 0);
+    if(mapped_data == NULL) {
+      GST_ERROR("Cannot map ION buffer\n");
+      return FALSE;
+    }
+    
+    GST_INFO("Copy data to secure ION buffer\n");
+    memcpy(mapped_data, minfo.data, secure_size);
+
+    //GST_INFO("Unmap secure ION buffer\n");
+    munmap(mapped_data, secure_size);
+
+#if 1
+    GST_INFO("Get physical address for the secure ION buffer\n");
+    if (ioctl(secure_fd, DMA_BUF_IOCTL_PHYS, &dma_phys) < 0) {
+      GST_ERROR("Cannot get ION physical address\n");
+      return FALSE;
+    }
+
+    phys_addr = dma_phys.phys;
+    if(phys_addr == NULL) {
+      GST_ERROR("ION physical address is NULL\n");
+      return FALSE;
+    }
+
+    vpu_buffer_node->nReserved[0] = secure_fd;
+#else
+    //GST_INFO("Unmap secure ION buffer\n");
+   // munmap(mapped_data, secure_size);
+
+    GST_INFO("[AJ] Free secure ION buffer: %d\n", secure_fd);
+    free_ion(secure_fd);
+#endif
+  }
+
+
+#endif
+
   vpu_buffer_node->nSize = minfo.size;
-  vpu_buffer_node->pPhyAddr = NULL;
+  vpu_buffer_node->pPhyAddr = phys_addr;
   vpu_buffer_node->pVirAddr = minfo.data;
   if (vpu_dec_object->input_state && vpu_dec_object->input_state->codec_data) {
     GstBuffer *buffer2 = vpu_dec_object->input_state->codec_data;
@@ -1489,6 +1633,13 @@ gst_vpu_dec_object_decode (GstVpuDecObject * vpu_dec_object, \
       }
     }
   }
+
+#ifdef AJ_WIP
+  if(in_data.nReserved[0] >= 0) {
+    GST_INFO("[AJ] Free secure ION (%d)\n", in_data.nReserved[0]);
+    free_ion(in_data.nReserved[0]);
+  }
+#endif
 
 	return GST_FLOW_OK;
 }
