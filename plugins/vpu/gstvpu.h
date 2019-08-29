@@ -45,7 +45,7 @@ static VPUMapper vpu_mappers[] = {
   {VPU_V_VP9, "video/x-vp9"},
   {VPU_V_VP8, "video/x-vp8"},
   {VPU_V_VP6, "video/x-vp6-flash"},
-  {VPU_V_AVC, "video/x-h264"},
+  {VPU_V_AVC, "video/x-h264, stream-format=(string)byte-stream"},
   {VPU_V_MPEG2, "video/mpeg, systemstream=(boolean)false, mpegversion=(int){1,2}"},
   {VPU_V_MPEG4, "video/mpeg, mpegversion=(int)4"},
   {VPU_V_H263, "video/x-h263"},
