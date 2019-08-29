@@ -573,6 +573,9 @@ gst_vpu_dec_object_set_vpu_param (GstVpuDecObject * vpu_dec_object, \
   open_param->nPicWidth = GST_VIDEO_INFO_WIDTH(info);
   open_param->nPicHeight = GST_VIDEO_INFO_HEIGHT(info);
 
+  open_param->nSecureMode = 1;
+  open_param->nSecureBufferAllocSize = 0;
+
   return TRUE;
 }
 
@@ -1256,6 +1259,7 @@ gst_vpu_dec_object_set_vpu_input_buf (GstVpuDecObject * vpu_dec_object, \
 {
   GstBuffer * buffer;
   GstMapInfo minfo;
+  unsigned char *phys_addr = NULL;
 
   /* Hantro video decoder can output video frame even if only input one frame.
    * Needn't send EOS to drain it.
@@ -1283,9 +1287,54 @@ gst_vpu_dec_object_set_vpu_input_buf (GstVpuDecObject * vpu_dec_object, \
   buffer = frame->input_buffer;
   gst_buffer_map (buffer, &minfo, GST_MAP_READ);
 
+  /* Get physical address for the secure buffer */
+  {
+    unsigned int mem_count = gst_buffer_n_memory(buffer);
+    GstMemory *memory = NULL;
+    int secure_fd = -1;
+    struct dma_buf_phys dma_phys;
+
+    if(mem_count != 1) {
+      GST_ERROR("buffer does not have exactely one memory");
+      return FALSE;
+    }
+
+    memory = gst_buffer_get_memory(buffer, 0);
+    if(memory == NULL) {
+      GST_ERROR("invalid memory in buffer");
+      return FALSE;
+    }
+
+    if(strcmp(memory->allocator->mem_type, "ionmem") != 0) {
+      GST_ERROR("memory type for secure buffer is not ionmem");
+      return FALSE;
+    }
+
+    secure_fd = gst_dmabuf_memory_get_fd(memory);
+    if(secure_fd < 0) {
+      GST_ERROR("invalid ION file descriptor");
+      return FALSE;
+    }
+
+    if (ioctl(secure_fd, DMA_BUF_IOCTL_PHYS, &dma_phys) < 0) {
+      GST_ERROR("Cannot get ION physical address\n");
+      return FALSE;
+    }
+
+    phys_addr = dma_phys.phys;
+    if(phys_addr == NULL) {
+      GST_ERROR("ION physical address is NULL\n");
+      return FALSE;
+    }
+    GST_DEBUG("phys_addr is %p", phys_addr);
+
+    gst_memory_unref(memory);
+  }
+
   vpu_buffer_node->nSize = minfo.size;
-  vpu_buffer_node->pPhyAddr = NULL;
+  vpu_buffer_node->pPhyAddr = phys_addr;
   vpu_buffer_node->pVirAddr = minfo.data;
+
   if (vpu_dec_object->input_state && vpu_dec_object->input_state->codec_data) {
     GstBuffer *buffer2 = vpu_dec_object->input_state->codec_data;
     GstMapInfo minfo2;
