@@ -20,10 +20,14 @@
 
 #include <string.h>
 #include <libdrm/drm_fourcc.h>
+#include <linux/dma-buf.h>
 #include <gst/video/gstvideometa.h>
 #include <gst/video/gstvideohdr10meta.h>
 #include "gstimxcommon.h"
 #include <gst/allocators/gstphymemmeta.h>
+#include <gst/allocators/gstphysmemory.h>
+#include <gst/allocators/gstdmabufmeta.h>
+#include <gst/allocators/gstdmabuf.h>
 #include "gstvpuallocator.h"
 #include "gstvpudecobject.h"
 
