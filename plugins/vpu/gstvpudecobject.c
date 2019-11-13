@@ -1326,57 +1326,6 @@ gst_vpu_dec_object_set_vpu_input_buf (GstVpuDecObject * vpu_dec_object, \
   }
 #endif
 
-#if 0//def AJ_WIP
-  {
-    int secure_fd = -1;
-    unsigned int secure_size = minfo.size;
-    unsigned char *mapped_data = NULL;
-    struct dma_buf_phys dma_phys;
-
-    GST_INFO("Allocate secure ION buffer\n");
-    secure_fd = allocate_ion(secure_size);
-    if(secure_fd < 0) {
-      GST_ERROR("[AJ] Cannot allocate ION buffer\n");
-      return FALSE;
-    }
-    GST_INFO("[AJ] Allocated secure ION buffer: %d\n", secure_fd);
-
-    GST_INFO("Map secure ION buffer\n");
-    mapped_data = (unsigned char *)mmap(0, secure_size, PROT_READ | PROT_WRITE, MAP_SHARED, secure_fd, 0);
-    if(mapped_data == NULL) {
-      GST_ERROR("Cannot map ION buffer\n");
-      return FALSE;
-    }
-    
-    GST_INFO("[AJ] Copy data to secure ION buffer\n");
-    memcpy(mapped_data, minfo.data, secure_size);
-
-    //GST_INFO("Unmap secure ION buffer\n");
-    munmap(mapped_data, secure_size);
-
-#if 1
-    GST_INFO("Get physical address for the secure ION buffer\n");
-    if (ioctl(secure_fd, DMA_BUF_IOCTL_PHYS, &dma_phys) < 0) {
-      GST_ERROR("Cannot get ION physical address\n");
-      return FALSE;
-    }
-
-    phys_addr = dma_phys.phys;
-    if(phys_addr == NULL) {
-      GST_ERROR("ION physical address is NULL\n");
-      return FALSE;
-    }
-
-    vpu_buffer_node->nReserved[0] = secure_fd;
-#else
-    //GST_INFO("Unmap secure ION buffer\n");
-   // munmap(mapped_data, secure_size);
-
-    GST_INFO("[AJ] Free secure ION buffer: %d\n", secure_fd);
-    free_ion(secure_fd);
-#endif
-  }
-#else
   /* Actual end-to-end SDP */
   {
     unsigned int mem_count = gst_buffer_n_memory(buffer);
@@ -1408,11 +1357,11 @@ gst_vpu_dec_object_set_vpu_input_buf (GstVpuDecObject * vpu_dec_object, \
       int secure_fd = -1;
       struct dma_buf_phys dma_phys;
 
-    secure_fd = gst_dmabuf_memory_get_fd(memory);
-    if(secure_fd < 0) {
-      GST_ERROR("invalid ION file descriptor");
-      return FALSE;
-    }
+      secure_fd = gst_dmabuf_memory_get_fd(memory);
+      if(secure_fd < 0) {
+        GST_ERROR("invalid ION file descriptor");
+        return FALSE;
+      }
 
       GST_INFO("Get physical address for the secure ION buffer\n");
       if (ioctl(secure_fd, DMA_BUF_IOCTL_PHYS, &dma_phys) < 0) {
@@ -1467,9 +1416,6 @@ gst_vpu_dec_object_set_vpu_input_buf (GstVpuDecObject * vpu_dec_object, \
       printf ("\n");
       }
 #endif
-  }
-#endif
-
     gst_memory_unref(memory);
   }
 
@@ -1718,13 +1664,6 @@ gst_vpu_dec_object_decode (GstVpuDecObject * vpu_dec_object, \
       }
     }
   }
-
-#if 0//def AJ_WIP
-  if(in_data.nReserved[0] >= 0) {
-    GST_INFO("[AJ] Free secure ION (%d)\n", in_data.nReserved[0]);
-    free_ion(in_data.nReserved[0]);
-  }
-#endif
 
 	return GST_FLOW_OK;
 }
