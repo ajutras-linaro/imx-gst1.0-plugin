@@ -31,6 +31,13 @@
 #include "gstvpuallocator.h"
 #include "gstvpudecobject.h"
 
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/mman.h>
+
+
 GST_DEBUG_CATEGORY_STATIC(vpu_dec_object_debug);
 #define GST_CAT_DEFAULT vpu_dec_object_debug
 
