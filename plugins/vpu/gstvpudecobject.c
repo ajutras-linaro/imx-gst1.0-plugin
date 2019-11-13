@@ -37,6 +37,8 @@
 #include <unistd.h>
 #include <sys/mman.h>
 
+#include <sys/ioctl.h>
+
 
 GST_DEBUG_CATEGORY_STATIC(vpu_dec_object_debug);
 #define GST_CAT_DEFAULT vpu_dec_object_debug
