@@ -1264,6 +1264,8 @@ gst_vpu_dec_object_set_vpu_input_buf (GstVpuDecObject * vpu_dec_object, \
   GstBuffer * buffer;
   GstMapInfo minfo;
   unsigned char *phys_addr = NULL;
+  unsigned char *mapped_secure_data = NULL;
+  unsigned int mapped_secure_size = 0;
 
   /* Hantro video decoder can output video frame even if only input one frame.
    * Needn't send EOS to drain it.
@@ -1290,36 +1292,61 @@ gst_vpu_dec_object_set_vpu_input_buf (GstVpuDecObject * vpu_dec_object, \
 
   buffer = frame->input_buffer;
   gst_buffer_map (buffer, &minfo, GST_MAP_READ);
+  GST_DEBUG_OBJECT (vpu_dec_object, "[AJ] Mapped memory is %u bytes", minfo.size);
 
-  /* Get physical address for the secure buffer */
+#define AJ_DUMP_GSTBUFFER_INFO
+#ifdef AJ_DUMP_GSTBUFFER_INFO
   {
     unsigned int mem_count = gst_buffer_n_memory(buffer);
     GstMemory *memory = NULL;
+    unsigned int ii = 0;
+
+    GST_DEBUG_OBJECT (vpu_dec_object, "[AJ] GstBuffer has %u GstMemory", mem_count);
+
+    for(ii = 0; ii < mem_count; ii++) {
+      memory = gst_buffer_get_memory(buffer, ii);
+      if(memory != NULL) {
+        GST_DEBUG_OBJECT (vpu_dec_object, "[AJ] GstMemory type is %s", memory->allocator->mem_type);
+        GST_DEBUG_OBJECT (vpu_dec_object, "[AJ] GstMemory has %u bytes", memory->size);
+        gst_memory_unref(memory);
+      } else {
+        GST_ERROR_OBJECT (vpu_dec_object, "[AJ] GstMemory is NULL");
+      }
+    }
+    
+  }
+#endif
+
+#if 0//def AJ_WIP
+  {
     int secure_fd = -1;
+    unsigned int secure_size = minfo.size;
+    unsigned char *mapped_data = NULL;
     struct dma_buf_phys dma_phys;
 
-    if(mem_count != 1) {
-      GST_ERROR("buffer does not have exactely one memory");
-      return FALSE;
-    }
-
-    memory = gst_buffer_get_memory(buffer, 0);
-    if(memory == NULL) {
-      GST_ERROR("invalid memory in buffer");
-      return FALSE;
-    }
-
-    if(strcmp(memory->allocator->mem_type, "ionmem") != 0) {
-      GST_ERROR("memory type for secure buffer is not ionmem");
-      return FALSE;
-    }
-
-    secure_fd = gst_dmabuf_memory_get_fd(memory);
+    GST_INFO("Allocate secure ION buffer\n");
+    secure_fd = allocate_ion(secure_size);
     if(secure_fd < 0) {
-      GST_ERROR("invalid ION file descriptor");
+      GST_ERROR("[AJ] Cannot allocate ION buffer\n");
       return FALSE;
     }
+    GST_INFO("[AJ] Allocated secure ION buffer: %d\n", secure_fd);
 
+    GST_INFO("Map secure ION buffer\n");
+    mapped_data = (unsigned char *)mmap(0, secure_size, PROT_READ | PROT_WRITE, MAP_SHARED, secure_fd, 0);
+    if(mapped_data == NULL) {
+      GST_ERROR("Cannot map ION buffer\n");
+      return FALSE;
+    }
+    
+    GST_INFO("[AJ] Copy data to secure ION buffer\n");
+    memcpy(mapped_data, minfo.data, secure_size);
+
+    //GST_INFO("Unmap secure ION buffer\n");
+    munmap(mapped_data, secure_size);
+
+#if 1
+    GST_INFO("Get physical address for the secure ION buffer\n");
     if (ioctl(secure_fd, DMA_BUF_IOCTL_PHYS, &dma_phys) < 0) {
       GST_ERROR("Cannot get ION physical address\n");
       return FALSE;
@@ -1330,18 +1357,158 @@ gst_vpu_dec_object_set_vpu_input_buf (GstVpuDecObject * vpu_dec_object, \
       GST_ERROR("ION physical address is NULL\n");
       return FALSE;
     }
-    GST_DEBUG("phys_addr is %p", phys_addr);
+
+    vpu_buffer_node->nReserved[0] = secure_fd;
+#else
+    //GST_INFO("Unmap secure ION buffer\n");
+   // munmap(mapped_data, secure_size);
+
+    GST_INFO("[AJ] Free secure ION buffer: %d\n", secure_fd);
+    free_ion(secure_fd);
+#endif
+  }
+#else
+  /* Actual end-to-end SDP */
+  {
+    unsigned int mem_count = gst_buffer_n_memory(buffer);
+    GstMemory *memory = NULL;
+
+    if(mem_count != 1) {
+      GST_ERROR("buffer does not have exactely one memory");
+      return FALSE;
+    }
+    
+    memory = gst_buffer_get_memory(buffer, 0);
+    if(memory == NULL) {
+      GST_ERROR("invalid memory in buffer");
+      return FALSE;
+    }
+
+    if(strcmp(memory->allocator->mem_type, "ionmem") != 0) {
+       GST_ERROR("memory type for secure buffer is not ionmem");
+
+#if 0
+    phys_addr = gst_phys_memory_get_phys_addr(memory); /* AJ-TODO This returns 0xffffffffcxxxxxxx */
+    if(phys_addr == NULL) {
+      GST_ERROR("invalid physical address");
+      return FALSE;
+    }
+#else
+    {
+      /* Debug physical address */ 
+      int secure_fd = -1;
+      struct dma_buf_phys dma_phys;
+
+    secure_fd = gst_dmabuf_memory_get_fd(memory);
+    if(secure_fd < 0) {
+      GST_ERROR("invalid ION file descriptor");
+      return FALSE;
+    }
+
+      GST_INFO("Get physical address for the secure ION buffer\n");
+      if (ioctl(secure_fd, DMA_BUF_IOCTL_PHYS, &dma_phys) < 0) {
+        GST_ERROR("Cannot get ION physical address\n");
+        return FALSE;
+      }
+
+      phys_addr = dma_phys.phys;
+      if(phys_addr == NULL) {
+        GST_ERROR("ION physical address is NULL\n");
+        return FALSE;
+      }   
+
+      GST_DEBUG("[AJ2] phys_addr is %p", phys_addr);
+
+#if 1
+      GST_INFO("Map secure ION buffer\n");
+      mapped_secure_data = (unsigned char *)mmap(0, memory->size, PROT_READ | PROT_WRITE, MAP_SHARED, secure_fd, 0);
+      if(mapped_secure_data == NULL) {
+        GST_ERROR("Cannot map ION buffer\n");
+        return FALSE;
+      }
+      mapped_secure_size = memory->size;
+
+    //  printf ("[AJ2] ******************** Copy decrypted content to shared memory ***********************\n");
+/*
+#if 0
+      memcpy(minfo.data, mapped_secure_data, minfo.size);
+#else
+      for(int i=0;i<minfo.size;i++) {
+        if(minfo.data[i] == 0){
+          minfo.data[i] = mapped_secure_data[i];
+        }
+      }
+#endif
+*/
+      {
+      unsigned int dump_size = (minfo.size < 100) ? minfo.size : 100;
+
+      printf ("[AJ] Shared memory (%u bytes):\n [AJ] ", minfo.size);
+      {
+        for (int i=0; i<dump_size; i++)
+          printf ("%02x", minfo.data[i]);
+      }
+      printf ("\n");
+
+      printf ("[AJ] Mapped ION memory (%u bytes):\n [AJ] ", memory->size);
+      {
+        for (int i=0; i<dump_size; i++)
+          printf ("%02x", mapped_secure_data[i]);
+      }
+      printf ("\n");
+      }
+#endif
+  }
+#endif
 
     gst_memory_unref(memory);
   }
 
-  vpu_buffer_node->nSize = minfo.size;
+#endif
+
+// AJ-TODO - Let's try to convert ion data to byte stream!!!
+  #if 0
+  {    
+    unsigned char* pFrm=NULL;
+    unsigned int nFrmSize=0;
+    int nalSize = 0;
+    VpuConvertAvccFrame(mapped_secure_data, mapped_secure_size, 4, &pFrm,&nFrmSize, &nalSize);
+    if(pFrm!=mapped_secure_data){
+      GST_DEBUG_OBJECT (vpu_dec_object, "[AJ2] newly allocate frame buffer");
+    }
+  }
+  #endif
+  vpu_buffer_node->nSize = minfo.size;//mapped_secure_size; /* AJ-TODO: Restore minfo.size;*/
   vpu_buffer_node->pPhyAddr = phys_addr;
   vpu_buffer_node->pVirAddr = minfo.data;
 
   if (vpu_dec_object->input_state && vpu_dec_object->input_state->codec_data) {
     GstBuffer *buffer2 = vpu_dec_object->input_state->codec_data;
     GstMapInfo minfo2;
+
+#define AJ_DUMP_GSTBUFFER_INFO
+#ifdef AJ_DUMP_GSTBUFFER_INFO
+    {
+      unsigned int mem_count = gst_buffer_n_memory(buffer2);
+      GstMemory *memory = NULL;
+      unsigned int ii = 0;
+
+      GST_DEBUG_OBJECT (vpu_dec_object, "[AJ] Codec data has %u GstMemory", mem_count);
+
+      for(ii = 0; ii < mem_count; ii++) {
+        memory = gst_buffer_get_memory(buffer2, ii);
+        if(memory != NULL) {
+          GST_DEBUG_OBJECT (vpu_dec_object, "[AJ] GstMemory type is %s", memory->allocator->mem_type);
+          GST_DEBUG_OBJECT (vpu_dec_object, "[AJ] GstMemory has %u bytes", memory->size);
+          gst_memory_unref(memory);
+        } else {
+          GST_ERROR_OBJECT (vpu_dec_object, "[AJ] GstMemory is NULL");
+        }
+      }
+      
+    }
+#endif
+
     gst_buffer_map (buffer2, &minfo2, GST_MAP_READ);
     vpu_buffer_node->sCodecData.nSize = minfo2.size;
     vpu_buffer_node->sCodecData.pData = minfo2.data;
@@ -1542,6 +1709,13 @@ gst_vpu_dec_object_decode (GstVpuDecObject * vpu_dec_object, \
       }
     }
   }
+
+#if 0//def AJ_WIP
+  if(in_data.nReserved[0] >= 0) {
+    GST_INFO("[AJ] Free secure ION (%d)\n", in_data.nReserved[0]);
+    free_ion(in_data.nReserved[0]);
+  }
+#endif
 
 	return GST_FLOW_OK;
 }
