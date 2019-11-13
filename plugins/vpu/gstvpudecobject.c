@@ -1344,7 +1344,7 @@ gst_vpu_dec_object_set_vpu_input_buf (GstVpuDecObject * vpu_dec_object, \
 
     if(strcmp(memory->allocator->mem_type, "ionmem") != 0) {
        GST_ERROR("memory type for secure buffer is not ionmem");
-
+    }
 #if 0
     phys_addr = gst_phys_memory_get_phys_addr(memory); /* AJ-TODO This returns 0xffffffffcxxxxxxx */
     if(phys_addr == NULL) {
@@ -1377,7 +1377,6 @@ gst_vpu_dec_object_set_vpu_input_buf (GstVpuDecObject * vpu_dec_object, \
 
       GST_DEBUG("[AJ2] phys_addr is %p", phys_addr);
 
-#if 1
       GST_INFO("Map secure ION buffer\n");
       mapped_secure_data = (unsigned char *)mmap(0, memory->size, PROT_READ | PROT_WRITE, MAP_SHARED, secure_fd, 0);
       if(mapped_secure_data == NULL) {
@@ -1386,38 +1385,27 @@ gst_vpu_dec_object_set_vpu_input_buf (GstVpuDecObject * vpu_dec_object, \
       }
       mapped_secure_size = memory->size;
 
-    //  printf ("[AJ2] ******************** Copy decrypted content to shared memory ***********************\n");
-/*
-#if 0
-      memcpy(minfo.data, mapped_secure_data, minfo.size);
-#else
-      for(int i=0;i<minfo.size;i++) {
-        if(minfo.data[i] == 0){
-          minfo.data[i] = mapped_secure_data[i];
+      {
+        unsigned int dump_size = (minfo.size < 100) ? minfo.size : 100;
+
+        printf ("[AJ] Shared memory (%u bytes):\n [AJ] ", minfo.size);
+        {
+          for (int i=0; i<dump_size; i++)
+            printf ("%02x", minfo.data[i]);
         }
-      }
-#endif
-*/
-      {
-      unsigned int dump_size = (minfo.size < 100) ? minfo.size : 100;
+        printf ("\n");
 
-      printf ("[AJ] Shared memory (%u bytes):\n [AJ] ", minfo.size);
-      {
-        for (int i=0; i<dump_size; i++)
-          printf ("%02x", minfo.data[i]);
+        printf ("[AJ] Mapped ION memory (%u bytes):\n [AJ] ", memory->size);
+        {
+          for (int i=0; i<dump_size; i++)
+            printf ("%02x", mapped_secure_data[i]);
+        }
+        printf ("\n");
       }
-      printf ("\n");
-
-      printf ("[AJ] Mapped ION memory (%u bytes):\n [AJ] ", memory->size);
-      {
-        for (int i=0; i<dump_size; i++)
-          printf ("%02x", mapped_secure_data[i]);
-      }
-      printf ("\n");
-      }
-#endif
+    }
     gst_memory_unref(memory);
   }
+
 
 #endif
 
