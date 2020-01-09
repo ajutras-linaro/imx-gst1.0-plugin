@@ -20,12 +20,18 @@
 
 #include <string.h>
 #include <libdrm/drm_fourcc.h>
+#include <linux/dma-buf.h>
 #include <gst/video/gstvideometa.h>
 #include <gst/video/gstvideohdr10meta.h>
 #include "gstimxcommon.h"
 #include <gst/allocators/gstphymemmeta.h>
+#include <gst/allocators/gstphysmemory.h>
+#include <gst/allocators/gstdmabufmeta.h>
+#include <gst/allocators/gstdmabuf.h>
 #include "gstvpuallocator.h"
 #include "gstvpudecobject.h"
+
+#define ENABLE_SDP 1
 
 GST_DEBUG_CATEGORY_STATIC(vpu_dec_object_debug);
 #define GST_CAT_DEFAULT vpu_dec_object_debug
@@ -572,6 +578,13 @@ gst_vpu_dec_object_set_vpu_param (GstVpuDecObject * vpu_dec_object, \
   open_param->nEnableFileMode = 0;
   open_param->nPicWidth = GST_VIDEO_INFO_WIDTH(info);
   open_param->nPicHeight = GST_VIDEO_INFO_HEIGHT(info);
+
+#if ENABLE_SDP
+  open_param->nSecureMode = 1;
+#else
+  open_param->nSecureMode = 0;
+#endif
+  open_param->nSecureBufferAllocSize = 0;
 
   return TRUE;
 }
@@ -1256,6 +1269,7 @@ gst_vpu_dec_object_set_vpu_input_buf (GstVpuDecObject * vpu_dec_object, \
 {
   GstBuffer * buffer;
   GstMapInfo minfo;
+  unsigned char *phys_addr = NULL;
 
   /* Hantro video decoder can output video frame even if only input one frame.
    * Needn't send EOS to drain it.
@@ -1283,8 +1297,57 @@ gst_vpu_dec_object_set_vpu_input_buf (GstVpuDecObject * vpu_dec_object, \
   buffer = frame->input_buffer;
   gst_buffer_map (buffer, &minfo, GST_MAP_READ);
 
+#if ENABLE_SDP
+  /* Actual end-to-end SDP */
+  {
+    unsigned int mem_count = gst_buffer_n_memory(buffer);
+    GstMemory *memory = NULL;
+
+    if(mem_count != 1) {
+      GST_ERROR("buffer does not have exactely one memory");
+      return FALSE;
+    }
+
+    memory = gst_buffer_get_memory(buffer, 0);
+    if(memory == NULL) {
+      GST_ERROR("invalid memory in buffer");
+      return FALSE;
+    }
+
+    if(strcmp(memory->allocator->mem_type, "ionmem") == 0) {
+      GST_DEBUG("memory type is ionmem");
+
+      /* Debug physical address */
+      int secure_fd = -1;
+      struct dma_buf_phys dma_phys;
+
+      secure_fd = gst_dmabuf_memory_get_fd(memory);
+      if(secure_fd < 0) {
+        GST_ERROR("invalid ION file descriptor");
+        return FALSE;
+      }
+
+      GST_INFO("Get physical address for the secure ION buffer\n");
+      if (ioctl(secure_fd, DMA_BUF_IOCTL_PHYS, &dma_phys) < 0) {
+        GST_ERROR("Cannot get ION physical address\n");
+        return FALSE;
+      }
+
+      phys_addr = dma_phys.phys;
+      if(phys_addr == NULL) {
+        GST_ERROR("ION physical address is NULL\n");
+        return FALSE;
+      }
+    } else {
+      // When the physical address is NULL, the vpu wrapper will use its ring buffer. 
+      phys_addr = NULL;
+    }
+
+    gst_memory_unref(memory);
+  }
+#endif
   vpu_buffer_node->nSize = minfo.size;
-  vpu_buffer_node->pPhyAddr = NULL;
+  vpu_buffer_node->pPhyAddr = phys_addr;
   vpu_buffer_node->pVirAddr = minfo.data;
   if (vpu_dec_object->input_state && vpu_dec_object->input_state->codec_data) {
     GstBuffer *buffer2 = vpu_dec_object->input_state->codec_data;
