@@ -47,7 +47,7 @@ plugin_init (GstPlugin * plugin)
   aiur_register_external_typefinders (plugin);
   //gst_aiur_stream_cache_get_type ();
   if (!gst_element_register
-      (plugin, "aiurdemux", (GST_RANK_PRIMARY+1), GST_TYPE_AIURDEMUX)){
+      (plugin, "aiurdemux", (GST_RANK_PRIMARY-100), GST_TYPE_AIURDEMUX)){
     return FALSE;
   }
   return TRUE;
