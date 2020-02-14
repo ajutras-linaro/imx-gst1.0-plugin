@@ -579,10 +579,11 @@ gst_vpu_dec_object_set_vpu_param (GstVpuDecObject * vpu_dec_object, \
 
 #if ENABLE_SDP
   open_param->nSecureMode = 1;
+  open_param->nSecureBufferAllocSize = 4*1024*1024; // TODO Avoid hardcoded value.
 #else
   open_param->nSecureMode = 0;
-#endif
   open_param->nSecureBufferAllocSize = 0;
+#endif
 
   return TRUE;
 }
