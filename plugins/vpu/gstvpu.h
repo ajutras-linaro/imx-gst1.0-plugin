@@ -41,7 +41,11 @@ typedef struct
 } VPUMapper;
 
 static VPUMapper vpu_mappers[] = {
+#if ENABLE_SDP
+  {VPU_V_HEVC, "video/x-h265, stream-format=(string)byte-stream"},
+#else
   {VPU_V_HEVC, "video/x-h265"},
+#endif
   {VPU_V_VP9, "video/x-vp9"},
   {VPU_V_VP8, "video/x-vp8"},
   {VPU_V_VP6, "video/x-vp6-flash"},
