@@ -514,11 +514,28 @@ gst_vpu_dec_decide_allocation (GstVideoDecoder * bdec, GstQuery * query)
     if (allocator) {
       gst_object_unref (allocator);
     }
-    GST_DEBUG_OBJECT (dec, "using vpu allocator.\n");
 #ifdef USE_ION
-    allocator = gst_ion_allocator_obtain ();
+    {
+      GstCaps *sinkcaps = gst_pad_get_current_caps (GST_VIDEO_DECODER_SINK_PAD(bdec));
+      GstStructure *structure;
+      gboolean secure = FALSE;
+
+      GST_DEBUG_OBJECT (dec, "sink caps %" GST_PTR_FORMAT, sinkcaps);
+
+      structure = gst_caps_get_structure (sinkcaps, 0);
+      if(gst_structure_get_boolean (structure, "secure", &secure) && secure) {
+        // Allocate in secure display heap
+        GST_DEBUG_OBJECT (dec, "using secure display heap\n");
+        allocator = gst_ion_allocator_display_obtain ();
+      } else {
+        GST_DEBUG_OBJECT (dec, "using default ion heap.\n");
+        allocator = gst_ion_allocator_obtain ();
+      }
+      gst_object_unref(sinkcaps);
+    }
 #endif
     if (!allocator) {
+      GST_DEBUG_OBJECT (dec, "using vpu allocator.\n");
       allocator = gst_vpu_allocator_obtain();
     }
     dec->vpu_dec_object->use_my_allocator = TRUE;
